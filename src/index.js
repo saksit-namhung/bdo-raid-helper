@@ -3,6 +3,7 @@ const config = require('./config');
 const createEvent = require('./commands/createEvent');
 const handleReactionAdd = require('./handlers/reactionAdd');
 const handleReactionRemove = require('./handlers/reactionRemove');
+const { scheduleAutoEvent } = require('./scheduler/autoEvent');
 
 const client = new Client({
   intents: [
@@ -19,6 +20,7 @@ client.commands.set(createEvent.data.name, createEvent);
 
 client.once('ready', () => {
   console.log(`✅ BDO Raid Helper online as ${client.user.tag}`);
+  scheduleAutoEvent(client);
 });
 
 client.on('interactionCreate', async (interaction) => {

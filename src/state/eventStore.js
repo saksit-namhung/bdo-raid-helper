@@ -1,13 +1,12 @@
 // In-memory map: messageId -> eventState
 const events = new Map();
 
-function createEvent(messageId, channelId, guildId, { title, scheduledTime, description, poolLimits }) {
+function createEvent(messageId, channelId, guildId, { title, description, poolLimits }) {
   events.set(messageId, {
     messageId,
     channelId,
     guildId,
     title,
-    scheduledTime,
     description,
     poolLimits,
     // participants: userId -> { userId, username, selectedPool, assignedPool, joinOrder }

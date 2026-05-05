@@ -13,11 +13,13 @@ const POOL_LABELS = {
 };
 
 function buildEventEmbed(event) {
+  const totalParticipants = Object.keys(event.participants).length;
+
   const embed = new EmbedBuilder()
-    .setTitle(`${event.title}`)
+    .setTitle(event.title)
     .setColor(0xe8a735)
     .setDescription(event.description || '​')
-    .addFields({ name: '🕐 Time', value: event.scheduledTime, inline: false });
+    .addFields({ name: '👥 Total Participants', value: String(totalParticipants), inline: false });
 
   for (const pool of REAL_POOLS) {
     const emoji = config.emojis[pool];

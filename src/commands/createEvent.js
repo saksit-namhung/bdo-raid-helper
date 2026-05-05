@@ -9,11 +9,9 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName('create-event')
     .setDescription('Create a BDO raid/node war signup event')
-    // Only members with Manage Events permission can use this by default.
     // Server admins can override this per-role via Server Settings → Integrations.
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageEvents)
     .addStringOption(o => o.setName('title').setDescription('Event title').setRequired(true))
-    .addStringOption(o => o.setName('time').setDescription('Scheduled time (e.g. Saturday 21:00 ICT)').setRequired(true))
     .addStringOption(o => o.setName('description').setDescription('Event description'))
     .addIntegerOption(o => o.setName('mainball_max').setDescription(`Max Mainball (default ${DEFAULT_LIMITS.mainball})`).setMinValue(1))
     .addIntegerOption(o => o.setName('def_team_max').setDescription(`Max Def Team (default ${DEFAULT_LIMITS['def-team']})`).setMinValue(1))
@@ -23,7 +21,6 @@ module.exports = {
 
   async execute(interaction) {
     const title = interaction.options.getString('title');
-    const scheduledTime = interaction.options.getString('time');
     const description = interaction.options.getString('description') || '';
     const poolLimits = {
       mainball: interaction.options.getInteger('mainball_max') ?? DEFAULT_LIMITS.mainball,
@@ -35,9 +32,8 @@ module.exports = {
 
     await interaction.deferReply();
 
-    // Build initial embed with empty pools to get message id
     const tempEvent = {
-      title, scheduledTime, description, poolLimits,
+      title, description, poolLimits,
       pools: { mainball: [], 'def-team': [], commander: [], shai: [], flex: [], donkey: [] },
       participants: {},
     };
@@ -46,10 +42,9 @@ module.exports = {
     const message = await interaction.editReply({ embeds: [embed] });
 
     createEvent(message.id, interaction.channelId, interaction.guildId, {
-      title, scheduledTime, description, poolLimits,
+      title, description, poolLimits,
     });
 
-    // Add pool reaction emojis in order
     for (const pool of ['mainball', 'def-team', 'commander', 'shai', 'flex']) {
       await message.react(config.emojis[pool]);
     }
