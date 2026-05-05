@@ -1,0 +1,14 @@
+{
+  "name": "bdo-raid-helper",
+  "version": "1.0.0",
+  "description": "Discord bot for Black Desert Online raid/event signups",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "deploy": "node src/commands/deploy.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.7"
+  }
+}
