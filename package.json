@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Discord bot for Black Desert Online raid/event signups",
   "main": "src/main.js",
+  "bin": "src/main.js",
   "scripts": {
     "start": "node src/main.js",
     "deploy": "node src/commands/deploy.js",
