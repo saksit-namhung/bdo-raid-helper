@@ -27,4 +27,19 @@ function getEvent(messageId) {
   return events.get(messageId);
 }
 
-module.exports = { createEvent, getEvent };
+function exportState() {
+  const obj = {};
+  for (const [id, event] of events) {
+    obj[id] = event;
+  }
+  return obj;
+}
+
+function importState(obj) {
+  events.clear();
+  for (const [id, event] of Object.entries(obj || {})) {
+    events.set(id, event);
+  }
+}
+
+module.exports = { createEvent, getEvent, exportState, importState };
