@@ -5,8 +5,10 @@ const CONFIG_FILE = path.join(process.cwd(), 'config.json');
 const DOTENV_FILE = path.join(process.cwd(), '.env');
 
 async function main() {
-  // If neither config.json nor .env exists, run the first-time setup wizard
-  if (!fs.existsSync(CONFIG_FILE) && !fs.existsSync(DOTENV_FILE)) {
+  const forceSetup = process.argv.includes('--setup');
+
+  // Run wizard if --setup flag passed, or if no config exists yet
+  if (forceSetup || (!fs.existsSync(CONFIG_FILE) && !fs.existsSync(DOTENV_FILE))) {
     const { runSetup } = require('./setup');
     await runSetup();
   }
