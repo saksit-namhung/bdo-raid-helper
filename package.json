@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/main.js",
     "deploy": "node src/commands/deploy.js",
-    "build": "pkg . --out-path dist"
+    "build": "node build.js"
   },
   "pkg": {
     "targets": [

@@ -6,8 +6,8 @@ const config = require('../config');
 const { exportState, importState } = require('../state/eventStore');
 
 const STATE_FILE = path.join(process.cwd(), 'state.json');
-const SYNC_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
-const LEADER_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes — leader considered dead after this
+const SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const LEADER_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes — leader considered dead after this
 
 const instanceId = `node-${Date.now()}-${Math.floor(Math.random() * 9999)
   .toString()
