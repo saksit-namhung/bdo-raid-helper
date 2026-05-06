@@ -168,6 +168,9 @@ class Coordinator extends EventEmitter {
       this._runStandby();
     } else {
       console.log('[Node] No active leader found. Claiming leadership…');
+      // Recover whatever state exists in the coord channel before taking over so
+      // that in-flight event registrations (reactions) keep working after handoff.
+      await this._syncFromCoordChannel().catch(() => {});
       await this._updateStatusCard([
         '⚠️ **No active host** — starting…',
         `📅 **Detected:** <t:${Math.floor(Date.now() / 1000)}:R>`,
@@ -239,6 +242,33 @@ class Coordinator extends EventEmitter {
     this._deletePresence().catch(() => {});
     console.log(`[Leader] This node is now the leader`);
     this.emit('promote');
+  }
+
+  // Called by main.js gracefulShutdown on SIGINT/SIGTERM.
+  // Deletes the state message so standbys see Infinity age on their next
+  // 30-second health check and immediately start a new election.
+  async shutdown() {
+    if (this._syncTimer) {
+      clearInterval(this._syncTimer);
+      this._syncTimer = null;
+    }
+
+    await this._deletePresence().catch(() => {});
+
+    if (!config.coordinationChannelId) return;
+
+    try {
+      const messages = await this._getCoordMessages();
+      const stateMsg = this._findStateMessage(messages);
+      if (stateMsg) {
+        await this._rest.delete(
+          Routes.channelMessage(config.coordinationChannelId, stateMsg.id)
+        );
+        console.log('[Node] State message removed — standbys will elect a new leader.');
+      }
+    } catch (err) {
+      console.warn('[Node] Shutdown cleanup error:', err.message);
+    }
   }
 
   // ── Leader mode ───────────────────────────────────────────────────────────────
