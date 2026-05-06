@@ -51,11 +51,16 @@ fs.writeFileSync(
   'utf8'
 );
 
+const PLATFORM_MAP = { win32: 'win', darwin: 'macos', linux: 'linux' };
+const platform = PLATFORM_MAP[process.platform] ?? process.platform;
+const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+const target = `node18-${platform}-${arch}`;
+
 console.log(`\n✅ Baked ${Object.keys(baked).length} config values into binary`);
-console.log('📦 Running pkg…\n');
+console.log(`📦 Running pkg for ${target}…\n`);
 
 try {
-  execSync('npx pkg . --out-path dist', { stdio: 'inherit' });
+  execSync(`npx pkg . --out-path dist --targets ${target}`, { stdio: 'inherit' });
   console.log('\n✅ Build complete — binaries are in dist/');
 } finally {
   // Always clean up the temp file, even if pkg fails

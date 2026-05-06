@@ -1,6 +1,28 @@
 const fs = require('fs');
 const path = require('path');
 
+// On Windows, pkg-bundled exes receive CTRL_C_EVENT instead of SIGINT.
+// readline registers a proper SetConsoleCtrlHandler that bridges the two.
+if (process.platform === 'win32') {
+  require('readline').createInterface({ input: process.stdin, output: process.stdout })
+    .on('SIGINT', () => process.emit('SIGINT'));
+}
+
+let _shuttingDown = false;
+async function gracefulShutdown() {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+  console.log('\n[Node] Shutting down…');
+  try {
+    const coordinator = require('./ha/coordinator');
+    await coordinator.shutdown();
+  } catch { /* best-effort */ }
+  process.exit(0);
+}
+
+process.on('SIGINT', gracefulShutdown);
+process.on('SIGTERM', gracefulShutdown);
+
 const CONFIG_FILE = path.join(process.cwd(), 'config.json');
 
 async function main() {

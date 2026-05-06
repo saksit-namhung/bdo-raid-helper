@@ -27,6 +27,10 @@ function getEvent(messageId) {
   return events.get(messageId);
 }
 
+function deleteEvent(messageId) {
+  events.delete(messageId);
+}
+
 function exportState() {
   const obj = {};
   for (const [id, event] of events) {
@@ -42,4 +46,4 @@ function importState(obj) {
   }
 }
 
-module.exports = { createEvent, getEvent, exportState, importState };
+module.exports = { createEvent, getEvent, deleteEvent, exportState, importState };

@@ -1,9 +1,14 @@
+const { EmbedBuilder } = require('discord.js');
 const config = require('../config');
-const { createEvent } = require('../state/eventStore');
+const { createEvent, deleteEvent } = require('../state/eventStore');
 const { buildEventEmbed } = require('../logic/messageBuilder');
 
-// Tracks dates (YYYY-MM-DD) where an auto-event was already created this session
 const createdDates = new Set();
+
+let currentAutoEventMsgId = null;
+let currentCountdownMsg = null; // tracked so runAutoEvent can delete it
+
+const PRE_TRANSITION_MS = 60_000; // 1 minute before schedule
 
 function validate() {
   const { autoEvent } = config;
@@ -15,7 +20,7 @@ function validate() {
 }
 
 function todayKey() {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  return new Date().toISOString().slice(0, 10);
 }
 
 function msUntilNext(hour, minute) {
@@ -24,6 +29,63 @@ function msUntilNext(hour, minute) {
   next.setHours(hour, minute, 0, 0);
   if (next <= now) next.setDate(next.getDate() + 1);
   return next - now;
+}
+
+// Deletes all messages in a channel, using bulkDelete where possible.
+async function clearChannel(channel) {
+  const messages = await channel.messages.fetch({ limit: 100 });
+  if (messages.size === 0) return;
+
+  if (messages.size === 1) {
+    await messages.first().delete().catch(() => {});
+    return;
+  }
+
+  // bulkDelete only works for messages < 14 days old; fall back to individual deletes
+  await channel.bulkDelete(messages).catch(async () => {
+    for (const msg of messages.values()) {
+      await msg.delete().catch(() => {});
+    }
+  });
+}
+
+// Called ~1 minute before the next scheduled event.
+// Clears ALL messages in AUTO_EVENT_CHANNEL_ID then posts a countdown.
+async function preTransition(client, msUntilEvent) {
+  // Remove current event from store so reaction handlers ignore it
+  if (currentAutoEventMsgId) {
+    deleteEvent(currentAutoEventMsgId);
+    currentAutoEventMsgId = null;
+  }
+
+  let channel;
+  try {
+    channel = await client.channels.fetch(config.autoEvent.channelId);
+  } catch (err) {
+    console.error('[AutoEvent] Pre-transition failed to fetch channel:', err.message);
+    return;
+  }
+
+  try {
+    await clearChannel(channel);
+  } catch (err) {
+    console.error('[AutoEvent] Pre-transition failed to clear channel:', err.message);
+  }
+
+  const eventUnixTs = Math.floor((Date.now() + msUntilEvent) / 1000);
+
+  const countdownEmbed = new EmbedBuilder()
+    .setTitle('⏳ Next Event Starting Soon')
+    .setDescription(`A new event will begin <t:${eventUnixTs}:R>.`)
+    .setColor(0x808080)
+    .setFooter({ text: 'Signups are closed. Please wait for the new card.' });
+
+  try {
+    currentCountdownMsg = await channel.send({ embeds: [countdownEmbed] });
+    console.log('[AutoEvent] Pre-transition: cleared channel, posted countdown.');
+  } catch (err) {
+    console.error('[AutoEvent] Pre-transition failed to send countdown:', err.message);
+  }
 }
 
 async function runAutoEvent(client) {
@@ -70,6 +132,14 @@ async function runAutoEvent(client) {
     await message.react(config.emojis[pool]);
   }
 
+  // Remove the countdown now that the event card is live
+  if (currentCountdownMsg) {
+    await currentCountdownMsg.delete().catch(() => {});
+    currentCountdownMsg = null;
+  }
+
+  currentAutoEventMsgId = message.id;
+
   createdDates.add(today);
   console.log(`[AutoEvent] Created event "${autoEvent.title}" for ${today}`);
 }
@@ -87,6 +157,12 @@ function scheduleAutoEvent(client) {
     const delay = msUntilNext(hour, minute);
     const minutesUntil = Math.round(delay / 60000);
     console.log(`[AutoEvent] Next auto-event in ${minutesUntil} minute(s) at ${config.autoEvent.schedule}`);
+
+    if (delay > PRE_TRANSITION_MS) {
+      setTimeout(async () => {
+        await preTransition(client, PRE_TRANSITION_MS);
+      }, delay - PRE_TRANSITION_MS);
+    }
 
     setTimeout(async () => {
       await runAutoEvent(client);
