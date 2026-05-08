@@ -1,37 +1,47 @@
 const { EmbedBuilder } = require('discord.js');
 const config = require('../config');
+const scheduleConfig = require('./scheduleConfig');
 const { createEvent, deleteEvent } = require('../state/eventStore');
 const { buildEventEmbed } = require('../logic/messageBuilder');
 
-const createdDates = new Set();
-
-let currentAutoEventMsgId = null;
-let currentCountdownMsg = null; // tracked so runAutoEvent can delete it
-
+// Sunday=0 … Saturday=6 (matches Date.getDay())
+const DAYS_BY_INDEX = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 const PRE_TRANSITION_MS = 60_000; // 1 minute before schedule
 
-function validate() {
-  const { autoEvent } = config;
-  if (!autoEvent.enabled) return 'AUTO_EVENT_ENABLED is not set to true';
-  if (!autoEvent.channelId) return 'AUTO_EVENT_CHANNEL_ID is missing';
-  if (!autoEvent.title) return 'AUTO_EVENT_TITLE is missing';
-  if (!/^\d{1,2}:\d{2}$/.test(autoEvent.schedule)) return 'AUTO_EVENT_SCHEDULE must be in HH:MM format';
-  return null;
-}
+const createdDates = new Set();
+let currentAutoEventMsgId = null;
+let currentCountdownMsg = null;
+let currentTimer = null;
+let currentPreTimer = null;
+let _client = null; // set once in scheduleAutoEvent, reused by restart
 
 function todayKey() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function msUntilNext(hour, minute) {
+// Find the next enabled day+time from now. Returns { ms, dayName, time, pools } or null.
+function msUntilNextEnabled() {
   const now = new Date();
-  const next = new Date();
-  next.setHours(hour, minute, 0, 0);
-  if (next <= now) next.setDate(next.getDate() + 1);
-  return next - now;
+  const todayIdx = now.getDay();
+  const sched = scheduleConfig.get();
+
+  for (let offset = 0; offset < 7; offset++) {
+    const dayIdx = (todayIdx + offset) % 7;
+    const dayName = DAYS_BY_INDEX[dayIdx];
+    const dayCfg = sched[dayName];
+    if (!dayCfg || !dayCfg.enabled) continue;
+
+    const [hour, minute] = dayCfg.time.split(':').map(Number);
+    const next = new Date(now);
+    next.setDate(now.getDate() + offset);
+    next.setHours(hour, minute, 0, 0);
+    if (next > now) {
+      return { ms: next - now, dayName, time: dayCfg.time, pools: dayCfg.pools };
+    }
+  }
+  return null; // all days disabled
 }
 
-// Deletes all messages in a channel, using bulkDelete where possible.
 async function clearChannel(channel) {
   const messages = await channel.messages.fetch({ limit: 100 });
   if (messages.size === 0) return;
@@ -41,7 +51,6 @@ async function clearChannel(channel) {
     return;
   }
 
-  // bulkDelete only works for messages < 14 days old; fall back to individual deletes
   await channel.bulkDelete(messages).catch(async () => {
     for (const msg of messages.values()) {
       await msg.delete().catch(() => {});
@@ -49,10 +58,7 @@ async function clearChannel(channel) {
   });
 }
 
-// Called ~1 minute before the next scheduled event.
-// Clears ALL messages in AUTO_EVENT_CHANNEL_ID then posts a countdown.
 async function preTransition(client, msUntilEvent) {
-  // Remove current event from store so reaction handlers ignore it
   if (currentAutoEventMsgId) {
     deleteEvent(currentAutoEventMsgId);
     currentAutoEventMsgId = null;
@@ -88,12 +94,9 @@ async function preTransition(client, msUntilEvent) {
   }
 }
 
-async function runAutoEvent(client) {
-  const error = validate();
-  if (error) {
-    console.log(`[AutoEvent] Skipping: ${error}`);
-    return;
-  }
+async function runAutoEvent(client, pools) {
+  const { autoEvent } = config;
+  if (!autoEvent.enabled || !autoEvent.channelId || !autoEvent.title) return;
 
   const today = todayKey();
   if (createdDates.has(today)) {
@@ -101,7 +104,7 @@ async function runAutoEvent(client) {
     return;
   }
 
-  const { autoEvent } = config;
+  const poolLimits = pools || autoEvent.poolLimits;
 
   let channel;
   try {
@@ -114,7 +117,7 @@ async function runAutoEvent(client) {
   const tempEvent = {
     title: autoEvent.title,
     description: autoEvent.description,
-    poolLimits: autoEvent.poolLimits,
+    poolLimits,
     pools: { mainball: [], 'def-team': [], commander: [], shai: [], flex: [], donkey: [] },
     participants: {},
   };
@@ -125,50 +128,72 @@ async function runAutoEvent(client) {
   createEvent(message.id, channel.id, channel.guildId, {
     title: autoEvent.title,
     description: autoEvent.description,
-    poolLimits: autoEvent.poolLimits,
+    poolLimits,
   });
 
   for (const pool of ['mainball', 'def-team', 'commander', 'shai', 'flex']) {
     await message.react(config.emojis[pool]);
   }
 
-  // Remove the countdown now that the event card is live
   if (currentCountdownMsg) {
     await currentCountdownMsg.delete().catch(() => {});
     currentCountdownMsg = null;
   }
 
   currentAutoEventMsgId = message.id;
-
   createdDates.add(today);
   console.log(`[AutoEvent] Created event "${autoEvent.title}" for ${today}`);
 }
 
-function scheduleAutoEvent(client) {
-  const error = validate();
-  if (error) {
-    console.log(`[AutoEvent] Scheduler not started: ${error}`);
+function scheduleTick() {
+  const result = msUntilNextEnabled();
+
+  if (!result) {
+    console.log('[AutoEvent] All days disabled — checking again in 1 hour.');
+    currentTimer = setTimeout(scheduleTick, 60 * 60 * 1000);
     return;
   }
 
-  const [hour, minute] = config.autoEvent.schedule.split(':').map(Number);
+  const { ms: delay, dayName, time, pools } = result;
+  const minutesUntil = Math.round(delay / 60000);
+  console.log(`[AutoEvent] Next auto-event in ${minutesUntil}m on ${dayName} at ${time}`);
 
-  function scheduleTick() {
-    const delay = msUntilNext(hour, minute);
-    const minutesUntil = Math.round(delay / 60000);
-    console.log(`[AutoEvent] Next auto-event in ${minutesUntil} minute(s) at ${config.autoEvent.schedule}`);
-
-    if (delay > PRE_TRANSITION_MS) {
-      setTimeout(async () => {
-        await preTransition(client, PRE_TRANSITION_MS);
-      }, delay - PRE_TRANSITION_MS);
-    }
-
-    setTimeout(async () => {
-      await runAutoEvent(client);
-      scheduleTick();
-    }, delay);
+  if (delay > PRE_TRANSITION_MS) {
+    currentPreTimer = setTimeout(async () => {
+      await preTransition(_client, PRE_TRANSITION_MS);
+    }, delay - PRE_TRANSITION_MS);
   }
+
+  currentTimer = setTimeout(async () => {
+    await runAutoEvent(_client, pools);
+    scheduleTick();
+  }, delay);
+}
+
+function scheduleAutoEvent(client) {
+  if (!config.autoEvent.enabled) {
+    console.log('[AutoEvent] Scheduler not started: AUTO_EVENT_ENABLED is not set to true');
+    return;
+  }
+  if (!config.autoEvent.channelId) {
+    console.log('[AutoEvent] Scheduler not started: AUTO_EVENT_CHANNEL_ID is missing');
+    return;
+  }
+  if (!config.autoEvent.title) {
+    console.log('[AutoEvent] Scheduler not started: AUTO_EVENT_TITLE is missing');
+    return;
+  }
+
+  _client = client;
+
+  scheduleConfig.on('change', () => {
+    if (currentTimer) clearTimeout(currentTimer);
+    if (currentPreTimer) clearTimeout(currentPreTimer);
+    currentTimer = null;
+    currentPreTimer = null;
+    console.log('[AutoEvent] Schedule updated — restarting scheduler.');
+    scheduleTick();
+  });
 
   scheduleTick();
 }
