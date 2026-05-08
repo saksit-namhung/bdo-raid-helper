@@ -2,5 +2,8 @@ node_modules/
 .env
 config.json
 state.json
+schedule.json
 dist/
+logs/
 src/baked-config.js
+bdo-tray.ico

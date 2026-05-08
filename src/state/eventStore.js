@@ -1,7 +1,7 @@
 // In-memory map: messageId -> eventState
 const events = new Map();
 
-function createEvent(messageId, channelId, guildId, { title, description, poolLimits }) {
+function createEvent(messageId, channelId, guildId, { title, description, poolLimits, isAutoEvent = false }) {
   events.set(messageId, {
     messageId,
     channelId,
@@ -9,6 +9,7 @@ function createEvent(messageId, channelId, guildId, { title, description, poolLi
     title,
     description,
     poolLimits,
+    isAutoEvent,
     // participants: userId -> { userId, username, selectedPool, assignedPool, joinOrder }
     participants: {},
     pools: {
@@ -21,6 +22,14 @@ function createEvent(messageId, channelId, guildId, { title, description, poolLi
     },
     joinSequence: 0,
   });
+}
+
+// Returns the message ID of the current auto-event, or null if none exists.
+function findAutoEventId() {
+  for (const [id, ev] of events) {
+    if (ev.isAutoEvent) return id;
+  }
+  return null;
 }
 
 function getEvent(messageId) {
@@ -46,4 +55,4 @@ function importState(obj) {
   }
 }
 
-module.exports = { createEvent, getEvent, deleteEvent, exportState, importState };
+module.exports = { createEvent, getEvent, deleteEvent, exportState, importState, findAutoEventId };

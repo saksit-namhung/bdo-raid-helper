@@ -1,11 +1,15 @@
+'use strict';
+
 const { Client, GatewayIntentBits, Partials, Collection } = require('discord.js');
-const config = require('./config');
-const createEvent = require('./commands/createEvent');
-const raidSchedule = require('./commands/raidSchedule');
-const handleReactionAdd = require('./handlers/reactionAdd');
+const config          = require('./config');
+const logger          = require('./logger');
+const tray            = require('./tray');
+const createEvent     = require('./commands/createEvent');
+const raidSchedule    = require('./commands/raidSchedule');
+const handleReactionAdd    = require('./handlers/reactionAdd');
 const handleReactionRemove = require('./handlers/reactionRemove');
 const { scheduleAutoEvent } = require('./scheduler/autoEvent');
-const coordinator = require('./ha/coordinator');
+const coordinator     = require('./ha/coordinator');
 
 function startAsLeader() {
   const client = new Client({
@@ -19,11 +23,12 @@ function startAsLeader() {
   });
 
   client.commands = new Collection();
-  client.commands.set(createEvent.data.name, createEvent);
+  client.commands.set(createEvent.data.name,  createEvent);
   client.commands.set(raidSchedule.data.name, raidSchedule);
 
   client.once('ready', async () => {
-    console.log(`✅ BDO Raid Helper online as ${client.user.tag}`);
+    logger.info(`Bot online as ${client.user.tag}`);
+    tray.updateStatus(`● Online  (${client.user.tag})`);
     await coordinator.startLeaderSync(client);
     scheduleAutoEvent(client);
   });
@@ -36,16 +41,25 @@ function startAsLeader() {
     try {
       await command.execute(interaction);
     } catch (err) {
-      console.error(err);
+      logger.error(`Command "${interaction.commandName}" failed: ${err.message}`);
       const reply = { content: '❌ An error occurred while executing that command.', ephemeral: true };
       interaction.replied || interaction.deferred ? interaction.followUp(reply) : interaction.reply(reply);
     }
   });
 
-  client.on('messageReactionAdd', handleReactionAdd);
+  client.on('error', (err) => {
+    logger.error(`Discord client error: ${err.message}`);
+    tray.updateStatus('○ Error — reconnecting…');
+  });
+
+  client.on('messageReactionAdd',    handleReactionAdd);
   client.on('messageReactionRemove', handleReactionRemove);
 
-  client.login(config.token);
+  logger.info('Discord client logging in…');
+  client.login(config.token).catch((err) => {
+    logger.error(`Discord login failed: ${err.message}`);
+    tray.updateStatus('○ Login failed');
+  });
 }
 
 coordinator.on('promote', startAsLeader);

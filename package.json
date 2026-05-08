@@ -13,10 +13,12 @@
     "assets": [
       "node_modules/discord.js/src/**/*",
       "node_modules/@discordjs/**/*",
-      "node_modules/undici/**/*"
+      "node_modules/undici/**/*",
+      "node_modules/@trufflesuite/systray/dist/bin/**"
     ]
   },
   "dependencies": {
+    "@trufflesuite/systray": "^2.0.1",
     "discord.js": "^14.16.3",
     "dotenv": "^16.4.7"
   },

@@ -1,7 +1,7 @@
 const { EmbedBuilder } = require('discord.js');
 const config = require('../config');
 const scheduleConfig = require('./scheduleConfig');
-const { createEvent, deleteEvent } = require('../state/eventStore');
+const { createEvent, deleteEvent, findAutoEventId } = require('../state/eventStore');
 const { buildEventEmbed } = require('../logic/messageBuilder');
 
 // Sunday=0 … Saturday=6 (matches Date.getDay())
@@ -104,6 +104,14 @@ async function runAutoEvent(client, pools) {
     return;
   }
 
+  // Remove any stale auto-event left in the store from before a restart.
+  // Normally preTransition clears this, but currentAutoEventMsgId is null after restart.
+  const staleId = findAutoEventId();
+  if (staleId) {
+    deleteEvent(staleId);
+    console.log(`[AutoEvent] Removed stale auto-event ${staleId} from store.`);
+  }
+
   const poolLimits = pools || autoEvent.poolLimits;
 
   let channel;
@@ -129,6 +137,7 @@ async function runAutoEvent(client, pools) {
     title: autoEvent.title,
     description: autoEvent.description,
     poolLimits,
+    isAutoEvent: true,
   });
 
   for (const pool of ['mainball', 'def-team', 'commander', 'shai', 'flex']) {
@@ -198,4 +207,12 @@ function scheduleAutoEvent(client) {
   scheduleTick();
 }
 
-module.exports = { scheduleAutoEvent };
+/** Cancel pending timers — called during graceful shutdown. */
+function stopScheduler() {
+  if (currentTimer)    clearTimeout(currentTimer);
+  if (currentPreTimer) clearTimeout(currentPreTimer);
+  currentTimer    = null;
+  currentPreTimer = null;
+}
+
+module.exports = { scheduleAutoEvent, stopScheduler };
