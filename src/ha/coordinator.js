@@ -4,6 +4,7 @@ const path = require('path');
 const { REST, Routes, AttachmentBuilder } = require('discord.js');
 const config = require('../config');
 const { exportState, importState } = require('../state/eventStore');
+const scheduleConfig = require('../scheduler/scheduleConfig');
 
 const STATE_FILE = path.join(process.cwd(), 'state.json');
 const SYNC_INTERVAL_MS = 5 * 60 * 1000;    // 5 minutes — full state sync cadence
@@ -190,6 +191,7 @@ class Coordinator extends EventEmitter {
     const state = await this._downloadState(attachment.url);
 
     importState(state.events || {});
+    if (state.schedule) scheduleConfig.applyFull(state.schedule);
     this._saveLocally(state);
     console.log(
       `[Standby] State synced (${Object.keys(state.events || {}).length} events)`
@@ -321,10 +323,17 @@ class Coordinator extends EventEmitter {
     }, SYNC_INTERVAL_MS);
   }
 
+  // Immediately broadcast state — called by /raid-schedule after a config update.
+  broadcastNow() {
+    if (!this._client) return Promise.resolve();
+    return this._broadcastState(this._client);
+  }
+
   async _broadcastState(client) {
     const state = {
       syncedAt: Date.now(),
       leaderId: instanceId,
+      schedule: scheduleConfig.get(),
       events: exportState(),
     };
 

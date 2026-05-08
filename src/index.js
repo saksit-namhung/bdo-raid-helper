@@ -1,6 +1,7 @@
 const { Client, GatewayIntentBits, Partials, Collection } = require('discord.js');
 const config = require('./config');
 const createEvent = require('./commands/createEvent');
+const raidSchedule = require('./commands/raidSchedule');
 const handleReactionAdd = require('./handlers/reactionAdd');
 const handleReactionRemove = require('./handlers/reactionRemove');
 const { scheduleAutoEvent } = require('./scheduler/autoEvent');
@@ -19,6 +20,7 @@ function startAsLeader() {
 
   client.commands = new Collection();
   client.commands.set(createEvent.data.name, createEvent);
+  client.commands.set(raidSchedule.data.name, raidSchedule);
 
   client.once('ready', async () => {
     console.log(`✅ BDO Raid Helper online as ${client.user.tag}`);

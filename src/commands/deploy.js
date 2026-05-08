@@ -1,8 +1,9 @@
 const { REST, Routes } = require('discord.js');
 const config = require('../config');
 const createEvent = require('./createEvent');
+const raidSchedule = require('./raidSchedule');
 
-const commands = [createEvent.data.toJSON()];
+const commands = [createEvent.data.toJSON(), raidSchedule.data.toJSON()];
 const rest = new REST().setToken(config.token);
 
 (async () => {

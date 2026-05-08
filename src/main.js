@@ -54,7 +54,10 @@ async function main() {
     await runSetup(forceSetup);
   }
 
-  // 5. Start the bot
+  // 5. Initialise the per-day schedule (creates schedule.json from defaults if missing)
+  require('./scheduler/scheduleConfig').init();
+
+  // 6. Start the bot
   require('./index');
 }
 
