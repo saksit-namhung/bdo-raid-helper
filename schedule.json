@@ -1,0 +1,79 @@
+{
+  "monday": {
+    "enabled": true,
+    "time": "17:55",
+    "pools": {
+      "mainball": 22,
+      "def-team": 5,
+      "commander": 1,
+      "shai": 3,
+      "flex": 5
+    }
+  },
+  "tuesday": {
+    "enabled": true,
+    "time": "17:55",
+    "pools": {
+      "mainball": 20,
+      "def-team": 5,
+      "commander": 1,
+      "shai": 3,
+      "flex": 5
+    }
+  },
+  "wednesday": {
+    "enabled": true,
+    "time": "17:55",
+    "pools": {
+      "mainball": 20,
+      "def-team": 5,
+      "commander": 1,
+      "shai": 3,
+      "flex": 5
+    }
+  },
+  "thursday": {
+    "enabled": true,
+    "time": "17:55",
+    "pools": {
+      "mainball": 20,
+      "def-team": 5,
+      "commander": 1,
+      "shai": 3,
+      "flex": 5
+    }
+  },
+  "friday": {
+    "enabled": true,
+    "time": "16:15",
+    "pools": {
+      "mainball": 20,
+      "def-team": 5,
+      "commander": 1,
+      "shai": 3,
+      "flex": 5
+    }
+  },
+  "saturday": {
+    "enabled": true,
+    "time": "17:55",
+    "pools": {
+      "mainball": 20,
+      "def-team": 5,
+      "commander": 1,
+      "shai": 3,
+      "flex": 5
+    }
+  },
+  "sunday": {
+    "enabled": true,
+    "time": "17:55",
+    "pools": {
+      "mainball": 20,
+      "def-team": 5,
+      "commander": 1,
+      "shai": 3,
+      "flex": 5
+    }
+  }
+}
