@@ -1,9 +1,24 @@
 const fs = require('fs');
 const path = require('path');
+const BASE_DIR = require('./utils/baseDir');
+const { initTray, ensureAutoStart } = require('./tray');
 
-// On Windows, pkg-bundled exes receive CTRL_C_EVENT instead of SIGINT.
-// readline registers a proper SetConsoleCtrlHandler that bridges the two.
-if (process.platform === 'win32') {
+// In packaged GUI-subsystem builds there is no console, so redirect all output
+// to a rolling log file next to the exe for later inspection.
+if (typeof process.pkg !== 'undefined') {
+  const logPath   = path.join(BASE_DIR, 'bdo-raid-helper.log');
+  const logStream = fs.createWriteStream(logPath, { flags: 'a' });
+  const ts = () => new Date().toISOString();
+  ['log', 'info', 'warn', 'error'].forEach((lvl) => {
+    console[lvl] = (...args) => {
+      logStream.write(`[${ts()}] [${lvl.toUpperCase().padEnd(5)}] ${args.map(String).join(' ')}\n`);
+    };
+  });
+}
+
+// readline SIGINT bridge — only useful when a real console is attached (dev mode).
+// In the packaged GUI build stdin is a null device so we skip this.
+if (process.platform === 'win32' && typeof process.pkg === 'undefined') {
   require('readline').createInterface({ input: process.stdin, output: process.stdout })
     .on('SIGINT', () => process.emit('SIGINT'));
 }
@@ -23,7 +38,9 @@ async function gracefulShutdown() {
 process.on('SIGINT', gracefulShutdown);
 process.on('SIGTERM', gracefulShutdown);
 
-const CONFIG_FILE = path.join(process.cwd(), 'config.json');
+// Anchored to the exe location so Windows auto-start (which sets cwd to
+// system32) does not break config loading.
+const CONFIG_FILE = path.join(BASE_DIR, 'config.json');
 
 async function main() {
   const forceSetup = process.argv.includes('--setup');
@@ -57,7 +74,11 @@ async function main() {
   // 5. Initialise the per-day schedule (creates schedule.json from defaults if missing)
   require('./scheduler/scheduleConfig').init();
 
-  // 6. Start the bot
+  // 6. Start the system tray icon and register auto-start (Windows only)
+  initTray(gracefulShutdown);
+  ensureAutoStart();
+
+  // 7. Start the bot
   require('./index');
 }
 

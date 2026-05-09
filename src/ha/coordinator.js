@@ -5,12 +5,19 @@ const { REST, Routes, AttachmentBuilder } = require('discord.js');
 const config = require('../config');
 const { exportState, importState } = require('../state/eventStore');
 const scheduleConfig = require('../scheduler/scheduleConfig');
+const BASE_DIR = require('../utils/baseDir');
 
-const STATE_FILE = path.join(process.cwd(), 'state.json');
-const SYNC_INTERVAL_MS = 5 * 60 * 1000;    // 5 minutes — full state sync cadence
-const HEALTH_CHECK_MS = 30 * 1000;         // 30 seconds — leader liveness poll cadence
-const LEADER_TIMEOUT_MS = 6 * 60 * 1000;  // 6 minutes — leader considered dead after this
-const NODE_STALE_MS = LEADER_TIMEOUT_MS * 2; // presence message age threshold
+const STATE_FILE = path.join(BASE_DIR, 'state.json');
+const SYNC_INTERVAL_MS  = 15 * 60 * 1000; // 15 min  — leader broadcast cadence
+const HEALTH_CHECK_MS   =  2 * 60 * 1000; //  2 min  — standby liveness poll cadence
+const LEADER_TIMEOUT_MS = 20 * 60 * 1000; // 20 min  — must be > SYNC_INTERVAL
+const NODE_STALE_MS     = LEADER_TIMEOUT_MS * 2;
+
+// Short-lived cache for channel message fetches — collapses the 4+ separate
+// _getCoordMessages() calls that happen at startup into a single HTTP request.
+const MSG_CACHE_TTL_MS = 10_000;
+let _msgCache = null;
+let _msgCacheAt = 0;
 
 const instanceId = `node-${Date.now()}-${Math.floor(Math.random() * 9999)
   .toString()
@@ -44,9 +51,17 @@ class Coordinator extends EventEmitter {
   // ── Discord REST helpers ─────────────────────────────────────────────────────
 
   async _getCoordMessages() {
-    return this._rest.get(
+    const now = Date.now();
+    if (_msgCache && now - _msgCacheAt < MSG_CACHE_TTL_MS) return _msgCache;
+    _msgCache = await this._rest.get(
       Routes.channelMessages(config.coordinationChannelId, { limit: 10 })
     );
+    _msgCacheAt = now;
+    return _msgCache;
+  }
+
+  _invalidateMsgCache() {
+    _msgCache = null;
   }
 
   _findStateMessage(messages) {
@@ -85,6 +100,7 @@ class Coordinator extends EventEmitter {
         );
         this._statusMessageId = msg.id;
       }
+      this._invalidateMsgCache();
     } catch (err) {
       console.warn('[Node] Failed to update status card:', err.message);
     }
@@ -124,6 +140,7 @@ class Coordinator extends EventEmitter {
     if (!config.coordinationChannelId || !this._presenceMessageId) return;
     try {
       await this._rest.delete(Routes.channelMessage(config.coordinationChannelId, this._presenceMessageId));
+      this._invalidateMsgCache();
     } catch { /* already gone */ }
     this._presenceMessageId = null;
   }
@@ -138,6 +155,31 @@ class Coordinator extends EventEmitter {
       return Date.now() - new Date(msg.timestamp).getTime();
     } catch {
       return Infinity;
+    }
+  }
+
+  // ── Dead-cluster cleanup ─────────────────────────────────────────────────────
+
+  // Called when taking over a dead cluster (no active leader found). Deletes ALL
+  // bot messages from the coord channel so that:
+  //   1. The stale 🟢 state message is removed (not just patched).
+  //   2. Stale standby presence messages are removed, preventing them from being
+  //      counted as active nodes in the first _broadcastState of the new leader.
+  // Must be called AFTER _syncFromCoordChannel() so state is already in memory.
+  async _cleanupDeadCluster() {
+    if (!config.coordinationChannelId) return;
+    try {
+      const messages = await this._getCoordMessages();
+      for (const msg of messages.filter((m) => m.author.bot)) {
+        await this._rest.delete(
+          Routes.channelMessage(config.coordinationChannelId, msg.id)
+        ).catch(() => {});
+        await new Promise((r) => setTimeout(r, 600)); // stay within Discord's 5 req/5s delete limit
+      }
+      this._invalidateMsgCache();
+      this._presenceMessageId = null;
+    } catch (err) {
+      console.warn('[Node] Failed to clean up dead cluster messages:', err.message);
     }
   }
 
@@ -172,6 +214,9 @@ class Coordinator extends EventEmitter {
       // Recover whatever state exists in the coord channel before taking over so
       // that in-flight event registrations (reactions) keep working after handoff.
       await this._syncFromCoordChannel().catch(() => {});
+      // Wipe all stale bot messages (🟢 state card + dead standby presence messages)
+      // so the new leader starts with a clean channel and an accurate node count.
+      await this._cleanupDeadCluster().catch(() => {});
       await this._updateStatusCard([
         '⚠️ **No active host** — starting…',
         `📅 **Detected:** <t:${Math.floor(Date.now() / 1000)}:R>`,
@@ -257,39 +302,15 @@ class Coordinator extends EventEmitter {
 
     await this._deletePresence().catch(() => {});
 
-    if (!config.coordinationChannelId) return;
-
-    try {
-      const messages = await this._getCoordMessages();
-      const stateMsg = this._findStateMessage(messages);
-      if (stateMsg) {
-        await this._rest.delete(
-          Routes.channelMessage(config.coordinationChannelId, stateMsg.id)
-        );
-        console.log('[Node] State message removed — standbys will elect a new leader.');
-      }
-    } catch (err) {
-      console.warn('[Node] Shutdown cleanup error:', err.message);
-    }
-  }
-
-  // ── Leader mode ───────────────────────────────────────────────────────────────
-
-  async shutdown() {
-    if (this._syncTimer) {
-      clearInterval(this._syncTimer);
-      this._syncTimer = null;
-    }
-
     if (config.coordinationChannelId) {
       try {
-        // Delete the state attachment message so standbys immediately see Infinity age
         const messages = await this._getCoordMessages();
         const stateMsg = this._findStateMessage(messages);
         if (stateMsg) {
           await this._rest.delete(
             Routes.channelMessage(config.coordinationChannelId, stateMsg.id)
           );
+          console.log('[Node] State message removed — standbys will elect a new leader.');
         }
         await this._updateStatusCard([
           '🔴 **Host offline** — shutting down.',
@@ -298,7 +319,6 @@ class Coordinator extends EventEmitter {
       } catch (err) {
         console.warn('[Node] Shutdown cleanup error:', err.message);
       }
-      await this._deletePresence().catch(() => {});
     }
 
     if (this._client) this._client.destroy();

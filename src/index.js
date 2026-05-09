@@ -7,6 +7,22 @@ const handleReactionRemove = require('./handlers/reactionRemove');
 const { scheduleAutoEvent } = require('./scheduler/autoEvent');
 const coordinator = require('./ha/coordinator');
 
+// Retry delays in seconds: 10s, 30s, 60s, 120s, then cap at 300s
+const LOGIN_RETRY_DELAYS = [10, 30, 60, 120, 300];
+
+async function loginWithRetry(client, token) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await client.login(token);
+      return;
+    } catch (err) {
+      const delay = LOGIN_RETRY_DELAYS[Math.min(attempt - 1, LOGIN_RETRY_DELAYS.length - 1)];
+      console.error(`[Bot] Login attempt ${attempt} failed: ${err.message}. Retrying in ${delay}s…`);
+      await new Promise((r) => setTimeout(r, delay * 1000));
+    }
+  }
+}
+
 function startAsLeader() {
   const client = new Client({
     intents: [
@@ -28,6 +44,8 @@ function startAsLeader() {
     scheduleAutoEvent(client);
   });
 
+  client.on('error', (err) => console.error('[Bot] Client error:', err.message));
+
   client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
     const command = client.commands.get(interaction.commandName);
@@ -45,7 +63,7 @@ function startAsLeader() {
   client.on('messageReactionAdd', handleReactionAdd);
   client.on('messageReactionRemove', handleReactionRemove);
 
-  client.login(config.token);
+  loginWithRetry(client, config.token);
 }
 
 coordinator.on('promote', startAsLeader);

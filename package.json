@@ -10,6 +10,9 @@
     "build": "node build.js"
   },
   "pkg": {
+    "targets": [
+      "node18-win-x64"
+    ],
     "assets": [
       "node_modules/discord.js/src/**/*",
       "node_modules/@discordjs/**/*",

@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git stash *)",
+      "Bash(git pull *)",
+      "Bash(node --check src/main.js)",
+      "Bash(node --check src/ha/coordinator.js)",
+      "Bash(powershell -Sta -NonInteractive -NoProfile -ExecutionPolicy Bypass -Command ' *)",
+      "Bash(node --check src/tray.js)",
+      "Bash(node -e ' *)",
+      "PowerShell(Get-Process -Name \"bdo-raid-helper\" -ErrorAction SilentlyContinue)",
+      "PowerShell(tasklist /fi \"imagename eq bdo-raid-helper.exe\" /v)",
+      "PowerShell(taskkill /PID 58360 /F)",
+      "PowerShell(tasklist /fi \"imagename eq bdo-raid-helper.exe\" 2>&1)",
+      "Bash(powershell -Command \"Get-Content 'bdo-raid-helper.log' | Select-Object -Last 30\")",
+      "Bash(timeout 15 node src/main.js)",
+      "Bash(timeout 12 node -e ' *)",
+      "Bash(echo \"exit code: $?\")",
+      "Bash(powershell -Command \"Start-Sleep -Seconds 15\")",
+      "Bash(powershell -Command \"Write-Host 'Waiting 30s for rate limit to expire...'; Start-Sleep -Seconds 30; Write-Host 'Done'\")",
+      "PowerShell(taskkill /IM bdo-raid-helper.exe /F)",
+      "PowerShell(Stop-Process -Id 68568 -Force -ErrorAction SilentlyContinue)",
+      "Bash(taskkill /PID 68568 /F /T)",
+      "Bash(timeout 20 node src/main.js)",
+      "Bash(timeout 18 node src/main.js)",
+      "Bash(node --check src/index.js)",
+      "Bash(powershell -Command \"Start-Sleep -Seconds 3; if \\(Test-Path 'D:\\\\Projects\\\\bdo-raid-helper\\\\bdo-tray.log'\\) { Get-Content 'D:\\\\Projects\\\\bdo-raid-helper\\\\bdo-tray.log' } else { Write-Host 'bdo-tray.log not created yet' }\")"
+    ]
+  }
+}
