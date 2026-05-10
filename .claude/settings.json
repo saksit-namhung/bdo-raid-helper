@@ -24,7 +24,11 @@
       "Bash(timeout 20 node src/main.js)",
       "Bash(timeout 18 node src/main.js)",
       "Bash(node --check src/index.js)",
-      "Bash(powershell -Command \"Start-Sleep -Seconds 3; if \\(Test-Path 'D:\\\\Projects\\\\bdo-raid-helper\\\\bdo-tray.log'\\) { Get-Content 'D:\\\\Projects\\\\bdo-raid-helper\\\\bdo-tray.log' } else { Write-Host 'bdo-tray.log not created yet' }\")"
+      "Bash(powershell -Command \"Start-Sleep -Seconds 3; if \\(Test-Path 'D:\\\\Projects\\\\bdo-raid-helper\\\\bdo-tray.log'\\) { Get-Content 'D:\\\\Projects\\\\bdo-raid-helper\\\\bdo-tray.log' } else { Write-Host 'bdo-tray.log not created yet' }\")",
+      "Bash(timeout 14 node src/main.js)",
+      "PowerShell(Get-Process -Name \"bdo-raid-helper\",\"node\" -ErrorAction SilentlyContinue)",
+      "Bash(Start-Process \"bdo-raid-helper.exe\")",
+      "Bash(powershell -Command \"Start-Process 'D:\\\\Projects\\\\bdo-raid-helper\\\\dist\\\\bdo-raid-helper.exe'\")"
     ]
   }
 }

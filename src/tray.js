@@ -14,11 +14,12 @@ const REG_NAME = 'BDORaidHelper';
 
 function _isAutoStartRegistered() {
   try {
-    const out = require('child_process').execSync(
-      `reg query "${REG_KEY}" /v ${REG_NAME}`,
+    const { execFileSync } = require('child_process');
+    const out = execFileSync('reg.exe', ['query', REG_KEY, '/v', REG_NAME],
       { encoding: 'utf8', windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }
     );
-    return out.includes(REG_NAME);
+    // Also verify the stored path matches the current exe so a moved exe re-registers.
+    return out.toLowerCase().includes(process.execPath.toLowerCase());
   } catch {
     return false;
   }
@@ -28,10 +29,12 @@ function ensureAutoStart() {
   if (process.platform !== 'win32') return;
   if (_isAutoStartRegistered()) return;
   try {
-    require('child_process').execSync(
-      `reg add "${REG_KEY}" /v ${REG_NAME} /t REG_SZ /d "${process.execPath}" /f`,
-      { windowsHide: true }
-    );
+    const { execFileSync } = require('child_process');
+    // Always wrap in quotes so paths with spaces launch correctly from the Run key.
+    execFileSync('reg.exe', [
+      'add', REG_KEY, '/v', REG_NAME, '/t', 'REG_SZ',
+      '/d', `"${process.execPath}"`, '/f',
+    ], { windowsHide: true });
     console.log('[Tray] Registered for auto-start with Windows.');
   } catch (err) {
     console.warn('[Tray] Auto-start registration failed:', err.message);
@@ -108,7 +111,7 @@ try {
       Remove-ItemProperty -Path \$regPath -Name "BDORaidHelper" -ErrorAction SilentlyContinue
       \$autoItem.Checked = \$false
     } else {
-      New-ItemProperty -Path \$regPath -Name "BDORaidHelper" -Value "${pse(exePath)}" -PropertyType String -Force | Out-Null
+      New-ItemProperty -Path \$regPath -Name "BDORaidHelper" -Value '"${pse(exePath)}"' -PropertyType String -Force | Out-Null
       \$autoItem.Checked = \$true
     }
   })
@@ -139,12 +142,44 @@ try {
 
   \$tray.ContextMenuStrip = \$menu
 
+  # ── Windows shutdown / logoff handler ────────────────────────────────────────
+  # When Windows shuts down it sends WM_QUERYENDSESSION. SystemEvents.SessionEnding
+  # is the .NET surface for this. We use script-scoped variables because .NET
+  # delegates do not capture PowerShell local variables automatically.
+  \$script:flagFilePath = "${pse(_flagFile)}"
+  \$script:nodeHostPid  = ${nodePid}
+  \$script:sessionHandler = {
+    param(\$sender, \$e)
+    Write-TrayLog "Windows session ending — requesting graceful shutdown"
+    # Signal Node to run gracefulShutdown (same mechanism as the Exit menu item)
+    try { [System.IO.File]::WriteAllText(\$script:flagFilePath, "exit") } catch {}
+    \$script:running = \$false
+    # Block the handler for up to 8 s so Node has time to delete the Discord
+    # state message before Windows kills all processes.
+    \$deadline = [System.DateTime]::UtcNow.AddSeconds(8)
+    while ([System.DateTime]::UtcNow -lt \$deadline) {
+      try {
+        \$null = Get-Process -Id \$script:nodeHostPid -ErrorAction Stop
+        Start-Sleep -Milliseconds 300
+      } catch { break }   # Node has exited — we're done
+    }
+    Write-TrayLog "Session handler complete"
+  }
+  try {
+    [Microsoft.Win32.SystemEvents]::add_SessionEnding(\$script:sessionHandler)
+    Write-TrayLog "SessionEnding handler registered"
+  } catch {
+    Write-TrayLog "SessionEnding registration failed: \$(\$_.Exception.Message)"
+  }
+  # ─────────────────────────────────────────────────────────────────────────────
+
   \$script:running = \$true
   while (\$script:running) {
     [System.Windows.Forms.Application]::DoEvents()
     Start-Sleep -Milliseconds 100
   }
   Write-TrayLog "Tray loop exited normally"
+  try { [Microsoft.Win32.SystemEvents]::remove_SessionEnding(\$script:sessionHandler) } catch {}
 } catch {
   Write-TrayLog "ERROR: \$(\$_.Exception.Message)"
 }

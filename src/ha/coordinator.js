@@ -291,37 +291,42 @@ class Coordinator extends EventEmitter {
     this.emit('promote');
   }
 
-  // Called by main.js gracefulShutdown on SIGINT/SIGTERM.
-  // Deletes the state message so standbys see Infinity age on their next
-  // 30-second health check and immediately start a new election.
+  // Called by main.js gracefulShutdown and by the tray SessionEnding handler.
+  // Runs presence-delete and message-fetch in parallel to minimise wall time —
+  // on Windows shutdown we have ~8 seconds before the OS force-kills the process.
   async shutdown() {
     if (this._syncTimer) {
       clearInterval(this._syncTimer);
       this._syncTimer = null;
     }
 
-    await this._deletePresence().catch(() => {});
-
-    if (config.coordinationChannelId) {
-      try {
-        const messages = await this._getCoordMessages();
-        const stateMsg = this._findStateMessage(messages);
-        if (stateMsg) {
-          await this._rest.delete(
-            Routes.channelMessage(config.coordinationChannelId, stateMsg.id)
-          );
-          console.log('[Node] State message removed — standbys will elect a new leader.');
-        }
-        await this._updateStatusCard([
-          '🔴 **Host offline** — shutting down.',
-          `📅 **Stopped:** <t:${Math.floor(Date.now() / 1000)}:R>`,
-        ].join('\n')).catch(() => {});
-      } catch (err) {
-        console.warn('[Node] Shutdown cleanup error:', err.message);
-      }
+    if (this._client) {
+      this._client.destroy();
+      this._client = null;
     }
 
-    if (this._client) this._client.destroy();
+    if (!config.coordinationChannelId) return;
+
+    try {
+      // Presence-delete and message-fetch are independent — run them together.
+      const [, messages] = await Promise.all([
+        this._deletePresence().catch(() => {}),
+        this._getCoordMessages().catch(() => null),
+      ]);
+
+      if (!messages) return;
+
+      const stateMsg = this._findStateMessage(messages);
+      if (stateMsg) {
+        await this._rest.delete(
+          Routes.channelMessage(config.coordinationChannelId, stateMsg.id)
+        );
+        this._invalidateMsgCache();
+        console.log('[Node] State message removed — standbys will elect a new leader.');
+      }
+    } catch (err) {
+      console.warn('[Node] Shutdown cleanup error:', err.message);
+    }
   }
 
   async startLeaderSync(client) {
