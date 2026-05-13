@@ -1,5 +1,16 @@
 const fs = require('fs');
 const path = require('path');
+
+// Earliest-possible boot marker — written before anything else can crash.
+// Lets us distinguish "Windows didn't auto-start us" from "we crashed early".
+try {
+  const exeDir = process.pkg ? path.dirname(process.execPath) : process.cwd();
+  fs.appendFileSync(
+    path.join(exeDir, 'bdo-raid-helper.log'),
+    `[${new Date().toISOString()}] [BOOT ] process started, argv=${JSON.stringify(process.argv)}\n`
+  );
+} catch { /* best-effort */ }
+
 const BASE_DIR = require('./utils/baseDir');
 const { initTray, ensureAutoStart } = require('./tray');
 

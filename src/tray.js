@@ -7,35 +7,83 @@ const BASE_DIR = require('./utils/baseDir');
 let _psProc   = null;
 let _flagFile = null;
 
-// ── Auto-start (Node.js side) ─────────────────────────────────────────────────
+// ── Auto-start (Startup folder shortcut) ─────────────────────────────────────
+// We use a Startup folder .lnk instead of the HKCU\...\Run registry key because
+// Run keys were silently failing to launch the exe on this user's Windows install
+// despite a correct registry value. Startup folder is the canonical Windows
+// auto-start surface (used by OneDrive, Steam, etc.) and behaves identically
+// across Fast Startup, normal boot, and resume.
 
-const REG_KEY  = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
-const REG_NAME = 'BDORaidHelper';
+const LEGACY_REG_KEY  = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
+const LEGACY_REG_NAME = 'BDORaidHelper';
 
-function _isAutoStartRegistered() {
+function _startupLnkPath() {
+  return path.join(
+    process.env.APPDATA || '',
+    'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup',
+    'BDO Raid Helper.lnk'
+  );
+}
+
+// Reads the .lnk's TargetPath via WScript.Shell — returns lowercase string or ''.
+function _readShortcutTarget(lnk) {
   try {
     const { execFileSync } = require('child_process');
-    const out = execFileSync('reg.exe', ['query', REG_KEY, '/v', REG_NAME],
-      { encoding: 'utf8', windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }
-    );
-    // Also verify the stored path matches the current exe so a moved exe re-registers.
-    return out.toLowerCase().includes(process.execPath.toLowerCase());
+    const out = execFileSync('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-Command',
+      `try { (New-Object -ComObject WScript.Shell).CreateShortcut('${lnk.replace(/'/g, "''")}').TargetPath } catch {}`,
+    ], { encoding: 'utf8', windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    return out.trim().toLowerCase();
   } catch {
-    return false;
+    return '';
   }
+}
+
+function _isAutoStartRegistered() {
+  const lnk = _startupLnkPath();
+  if (!fs.existsSync(lnk)) return false;
+  // Also check that the shortcut points at the current exe — a moved install
+  // would otherwise silently keep launching the stale path.
+  return _readShortcutTarget(lnk) === process.execPath.toLowerCase();
+}
+
+function _removeLegacyRunKey() {
+  try {
+    const { execFileSync } = require('child_process');
+    execFileSync('reg.exe',
+      ['query', LEGACY_REG_KEY, '/v', LEGACY_REG_NAME],
+      { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }
+    );
+    // It exists — delete it so we don't double-launch.
+    execFileSync('reg.exe',
+      ['delete', LEGACY_REG_KEY, '/v', LEGACY_REG_NAME, '/f'],
+      { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }
+    );
+    console.log('[Tray] Removed legacy Run key (migrated to Startup folder).');
+  } catch { /* not present — fine */ }
 }
 
 function ensureAutoStart() {
   if (process.platform !== 'win32') return;
+  _removeLegacyRunKey();
   if (_isAutoStartRegistered()) return;
   try {
     const { execFileSync } = require('child_process');
-    // Always wrap in quotes so paths with spaces launch correctly from the Run key.
-    execFileSync('reg.exe', [
-      'add', REG_KEY, '/v', REG_NAME, '/t', 'REG_SZ',
-      '/d', `"${process.execPath}"`, '/f',
+    const lnk    = _startupLnkPath();
+    const exe    = process.execPath;
+    const exeDir = path.dirname(exe);
+    // Single-quote escape for PowerShell string literals
+    const psQ = (s) => s.replace(/'/g, "''");
+    execFileSync('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-Command',
+      `$s = (New-Object -ComObject WScript.Shell).CreateShortcut('${psQ(lnk)}');` +
+      `$s.TargetPath = '${psQ(exe)}';` +
+      `$s.WorkingDirectory = '${psQ(exeDir)}';` +
+      `$s.IconLocation = '${psQ(exe)},0';` +
+      `$s.Description = 'BDO Raid Helper Discord bot';` +
+      `$s.Save()`,
     ], { windowsHide: true });
-    console.log('[Tray] Registered for auto-start with Windows.');
+    console.log('[Tray] Auto-start shortcut created in Startup folder.');
   } catch (err) {
     console.warn('[Tray] Auto-start registration failed:', err.message);
   }
@@ -48,6 +96,16 @@ function initTray(onExit) {
 
   const exePath = process.execPath;
   _flagFile = path.join(os.tmpdir(), `bdo-tray-${process.pid}.flag`);
+
+  // Clean up flag files from previous force-killed runs so a stale "exit"
+  // signal can't cause a spurious immediate shutdown of this instance.
+  try {
+    for (const f of fs.readdirSync(os.tmpdir())) {
+      if (/^bdo-tray-\d+\.flag$/.test(f)) {
+        try { fs.unlinkSync(path.join(os.tmpdir(), f)); } catch { /* in use */ }
+      }
+    }
+  } catch { /* tmpdir unreadable — non-fatal */ }
 
   const iconPath    = path.join(BASE_DIR, 'icon.ico');
   const logPath     = path.join(BASE_DIR, 'bdo-raid-helper.log');
@@ -80,6 +138,14 @@ function Write-TrayLog([string]\$line) {
   } catch {}
 }`;
 
+  // Startup folder path used by the in-menu auto-start toggle (must match
+  // _startupLnkPath() on the JS side so both surfaces agree on truth).
+  const lnkPath = path.join(
+    process.env.APPDATA || '',
+    'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup',
+    'BDO Raid Helper.lnk'
+  );
+
   const psScript = `
 ${psWriteLog(`"${pse(trayLogPath)}"`)}
 Write-TrayLog "Tray PS started (PID \$PID)"
@@ -88,10 +154,49 @@ try {
   Add-Type -AssemblyName System.Drawing
   Write-TrayLog "Assemblies loaded"
 
+  # Inline C# Form subclass with WndProc override.
+  # Top-level forms reliably receive WM_ENDSESSION (0x16) via WndProc, unlike
+  # SystemEvents.SessionEnding which is unreliable under Fast Startup.
+  # We call ShutdownBlockReasonCreate to extend Windows shutdown timeout while
+  # Node finishes deleting the Discord state message.
+  if (-not ('TrayForm' -as [Type])) {
+    Add-Type -ReferencedAssemblies System.Windows.Forms,System.Drawing -TypeDefinition @"
+      using System;
+      using System.Runtime.InteropServices;
+      using System.Windows.Forms;
+      public class TrayForm : Form {
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        static extern bool ShutdownBlockReasonCreate(IntPtr hWnd, string pwszReason);
+        [DllImport("user32.dll")]
+        static extern bool ShutdownBlockReasonDestroy(IntPtr hWnd);
+        // Standard event pattern — PowerShell wires this via add_EndSessionReceived
+        // without needing a [Action] scriptblock cast (which fails silently in PS 5.1).
+        public event EventHandler EndSessionReceived;
+        protected override void WndProc(ref Message m) {
+          if (m.Msg == 0x0016 /* WM_ENDSESSION */ && m.WParam != IntPtr.Zero) {
+            try { ShutdownBlockReasonCreate(this.Handle, "Saving Discord state"); } catch {}
+            try { if (EndSessionReceived != null) EndSessionReceived(this, EventArgs.Empty); } catch {}
+            try { ShutdownBlockReasonDestroy(this.Handle); } catch {}
+          }
+          base.WndProc(ref m);
+        }
+      }
+"@
+  }
+
+  \$form = New-Object TrayForm
+  \$form.Text             = "BDO Raid Helper"
+  \$form.ShowInTaskbar    = \$false
+  \$form.FormBorderStyle  = [System.Windows.Forms.FormBorderStyle]::FixedToolWindow
+  \$form.WindowState      = [System.Windows.Forms.FormWindowState]::Minimized
+  \$form.Opacity          = 0
+  \$form.Size             = New-Object System.Drawing.Size(1, 1)
+  \$form.Location         = New-Object System.Drawing.Point(-32000, -32000)
+  Write-TrayLog "Hidden Form created"
+
   \$tray = New-Object System.Windows.Forms.NotifyIcon
   \$tray.Text = "BDO Raid Helper"
   ${iconLine}
-  Write-TrayLog "Icon set"
   \$tray.Visible = \$true
   Write-TrayLog "Tray visible"
 
@@ -102,16 +207,30 @@ try {
   [void]\$menu.Items.Add(\$statusItem)
   [void]\$menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 
-  \$regPath = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
-  \$isAuto  = \$null -ne (Get-ItemProperty -Path \$regPath -Name "BDORaidHelper" -ErrorAction SilentlyContinue)
+  # Auto-start uses a Startup folder .lnk (canonical Windows mechanism).
+  \$lnkPath  = "${pse(lnkPath)}"
+  \$exeFull  = "${pse(exePath)}"
+  \$exeDir   = "${pse(path.dirname(exePath))}"
+  function Test-AutoStart {
+    if (-not (Test-Path \$lnkPath)) { return \$false }
+    try {
+      \$tp = (New-Object -ComObject WScript.Shell).CreateShortcut(\$lnkPath).TargetPath
+      return (\$tp.ToLower() -eq \$exeFull.ToLower())
+    } catch { return \$false }
+  }
   \$autoItem = New-Object System.Windows.Forms.ToolStripMenuItem("Auto-start with Windows")
-  \$autoItem.Checked = \$isAuto
+  \$autoItem.Checked = Test-AutoStart
   \$autoItem.Add_Click({
     if (\$autoItem.Checked) {
-      Remove-ItemProperty -Path \$regPath -Name "BDORaidHelper" -ErrorAction SilentlyContinue
+      Remove-Item \$lnkPath -ErrorAction SilentlyContinue
       \$autoItem.Checked = \$false
     } else {
-      New-ItemProperty -Path \$regPath -Name "BDORaidHelper" -Value '"${pse(exePath)}"' -PropertyType String -Force | Out-Null
+      \$s = (New-Object -ComObject WScript.Shell).CreateShortcut(\$lnkPath)
+      \$s.TargetPath = \$exeFull
+      \$s.WorkingDirectory = \$exeDir
+      \$s.IconLocation = "\$exeFull,0"
+      \$s.Description = "BDO Raid Helper Discord bot"
+      \$s.Save()
       \$autoItem.Checked = \$true
     }
   })
@@ -127,10 +246,11 @@ try {
 
   \$exitItem = New-Object System.Windows.Forms.ToolStripMenuItem("Exit")
   \$exitItem.Add_Click({
-    \$tray.Visible = \$false
-    \$tray.Dispose()
-    [System.IO.File]::WriteAllText("${pse(_flagFile)}", "exit")
-    \$script:running = \$false
+    # User-initiated exit: signal Node async, then close the form. We do NOT
+    # block here -- gracefulShutdown will run on Node side via the flag file.
+    try { [System.IO.File]::WriteAllText("${pse(_flagFile)}", "exit") } catch {}
+    \$form.Close()
+    # 5 s watchdog: if Node hangs in coordinator.shutdown(), force-kill it.
     \$hostPid = ${nodePid}
     \$null = Start-Job -ScriptBlock {
       param(\$p)
@@ -141,45 +261,38 @@ try {
   [void]\$menu.Items.Add(\$exitItem)
 
   \$tray.ContextMenuStrip = \$menu
+  Write-TrayLog "Menu attached to tray"
 
-  # ── Windows shutdown / logoff handler ────────────────────────────────────────
-  # When Windows shuts down it sends WM_QUERYENDSESSION. SystemEvents.SessionEnding
-  # is the .NET surface for this. We use script-scoped variables because .NET
-  # delegates do not capture PowerShell local variables automatically.
+  # Wire the Form's WndProc -> EndSessionReceived -> flag-file + wait-for-Node.
+  # Re-entrancy guarded by \$script:shuttingDown so a concurrent Exit click
+  # can't trigger a second 8 s block.
+  \$script:shuttingDown = \$false
   \$script:flagFilePath = "${pse(_flagFile)}"
   \$script:nodeHostPid  = ${nodePid}
-  \$script:sessionHandler = {
-    param(\$sender, \$e)
-    Write-TrayLog "Windows session ending — requesting graceful shutdown"
-    # Signal Node to run gracefulShutdown (same mechanism as the Exit menu item)
+  \$form.add_EndSessionReceived({
+    if (\$script:shuttingDown) { return }
+    \$script:shuttingDown = \$true
+    Write-TrayLog "WM_ENDSESSION received -- signaling Node graceful shutdown"
     try { [System.IO.File]::WriteAllText(\$script:flagFilePath, "exit") } catch {}
-    \$script:running = \$false
-    # Block the handler for up to 8 s so Node has time to delete the Discord
-    # state message before Windows kills all processes.
+    # Block up to 8 s waiting for Node to finish coordinator.shutdown()
     \$deadline = [System.DateTime]::UtcNow.AddSeconds(8)
     while ([System.DateTime]::UtcNow -lt \$deadline) {
       try {
         \$null = Get-Process -Id \$script:nodeHostPid -ErrorAction Stop
-        Start-Sleep -Milliseconds 300
-      } catch { break }   # Node has exited — we're done
+        Start-Sleep -Milliseconds 200
+      } catch { break }
     }
-    Write-TrayLog "Session handler complete"
-  }
-  try {
-    [Microsoft.Win32.SystemEvents]::add_SessionEnding(\$script:sessionHandler)
-    Write-TrayLog "SessionEnding handler registered"
-  } catch {
-    Write-TrayLog "SessionEnding registration failed: \$(\$_.Exception.Message)"
-  }
-  # ─────────────────────────────────────────────────────────────────────────────
+    Write-TrayLog "WM_ENDSESSION handler complete"
+  })
 
-  \$script:running = \$true
-  while (\$script:running) {
-    [System.Windows.Forms.Application]::DoEvents()
-    Start-Sleep -Milliseconds 100
+  Write-TrayLog "Form message loop started"
+  try {
+    [System.Windows.Forms.Application]::Run(\$form)
+  } finally {
+    try { \$tray.Visible = \$false; \$tray.Dispose() } catch {}
+    try { \$menu.Dispose() } catch {}
+    Write-TrayLog "Application.Run returned - tray disposed"
   }
-  Write-TrayLog "Tray loop exited normally"
-  try { [Microsoft.Win32.SystemEvents]::remove_SessionEnding(\$script:sessionHandler) } catch {}
 } catch {
   Write-TrayLog "ERROR: \$(\$_.Exception.Message)"
 }
@@ -190,6 +303,11 @@ try {
   //   2. Eliminates .ps1 temp-file encoding ambiguity (the #1 silent-failure cause)
   //   3. Removes -NonInteractive which can block WinForms UI creation on some configs
   const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
+  // CreateProcessW caps the command line at ~32 KB. We're well under, but a
+  // future change ballooning the script should fail loud, not silently.
+  if (encoded.length > 30000) {
+    throw new Error(`Tray PS script too large for -EncodedCommand: ${encoded.length} chars`);
+  }
 
   try {
     _psProc = spawn('powershell.exe', [

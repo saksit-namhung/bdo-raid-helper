@@ -28,7 +28,12 @@
       "Bash(timeout 14 node src/main.js)",
       "PowerShell(Get-Process -Name \"bdo-raid-helper\",\"node\" -ErrorAction SilentlyContinue)",
       "Bash(Start-Process \"bdo-raid-helper.exe\")",
-      "Bash(powershell -Command \"Start-Process 'D:\\\\Projects\\\\bdo-raid-helper\\\\dist\\\\bdo-raid-helper.exe'\")"
+      "Bash(powershell -Command \"Start-Process 'D:\\\\Projects\\\\bdo-raid-helper\\\\dist\\\\bdo-raid-helper.exe'\")",
+      "Bash(ls \"C:/Users/Israe/.claude/plans/\" 2>/dev/null | head -5 || echo \"dir may not exist\")",
+      "Read(//c/Users/Israe/.claude/plans/**)",
+      "Bash(ls \"C:/Users/Israe/.claude/\" 2>/dev/null)",
+      "Read(//c/Users/Israe/.claude/**)",
+      "Read(//c/Temp/**)"
     ]
   }
 }
