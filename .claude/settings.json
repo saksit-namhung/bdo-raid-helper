@@ -33,7 +33,14 @@
       "Read(//c/Users/Israe/.claude/plans/**)",
       "Bash(ls \"C:/Users/Israe/.claude/\" 2>/dev/null)",
       "Read(//c/Users/Israe/.claude/**)",
-      "Read(//c/Temp/**)"
+      "Read(//c/Temp/**)",
+      "PowerShell($lnk = Join-Path $env:APPDATA 'Microsoft\\\\Windows\\\\Start Menu\\\\Programs\\\\Startup\\\\BDO Raid Helper.lnk'; if \\(Test-Path $lnk\\) { Write-Output \"EXISTS: $lnk\" } else { Write-Output \"MISSING: $lnk\" })",
+      "PowerShell(Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | Where-Object { $_.ParentProcessId -eq 20736 -or \\($_.CommandLine -and $_.CommandLine -match 'EncodedCommand'\\) } | Select-Object ProcessId, ParentProcessId, @{n='CmdHead';e={if\\($_.CommandLine\\){$_.CommandLine.Substring\\(0,[Math]::Min\\(120,$_.CommandLine.Length\\)\\)}}} | Format-Table -AutoSize -Wrap)",
+      "PowerShell($flag = Join-Path $env:TEMP 'bdo-tray-20736.flag'; [System.IO.File]::WriteAllText\\($flag, 'exit'\\); Write-Output \"Flag written: $flag\")",
+      "PowerShell(Start-Sleep -Seconds 6; $procs = Get-Process -Name \"bdo-raid-helper\" -ErrorAction SilentlyContinue; $ps20872 = Get-Process -Id 20872 -ErrorAction SilentlyContinue; if \\($procs\\) { Write-Output \"Still running: $\\($procs.Id -join ', '\\)\" } else { Write-Output \"bdo-raid-helper: TERMINATED\" }; if \\($ps20872\\) { Write-Output \"Tray PS 20872: still alive\" } else { Write-Output \"Tray PS 20872: TERMINATED\" })",
+      "PowerShell($lnk = Join-Path $env:APPDATA 'Microsoft\\\\Windows\\\\Start Menu\\\\Programs\\\\Startup\\\\BDO Raid Helper.lnk'; Remove-Item -LiteralPath $lnk -Force -ErrorAction SilentlyContinue; if \\(Test-Path $lnk\\) { Write-Output \"FAILED to remove: $lnk\" } else { Write-Output \"REMOVED: $lnk\" })",
+      "PowerShell($out = reg.exe query 'HKCU\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run' /v BDORaidHelper 2>&1; if \\($LASTEXITCODE -eq 0\\) { Write-Output \"Legacy Run key STILL EXISTS:`n$out\" } else { Write-Output \"Legacy Run key: not present\" })",
+      "PowerShell($running = Get-Process -Name \"bdo-raid-helper\" -ErrorAction SilentlyContinue; if \\($running\\) { Write-Output \"STILL RUNNING: $\\($running.Id\\)\" } else { Write-Output \"bdo-raid-helper: not running\" })"
     ]
   }
 }

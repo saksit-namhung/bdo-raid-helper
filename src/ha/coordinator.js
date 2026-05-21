@@ -30,6 +30,7 @@ class Coordinator extends EventEmitter {
     this._syncTimer = null;
     this._presenceMessageId = null; // this node's heartbeat message in coord channel
     this._statusMessageId = null;   // standalone status message posted when no state msg existed
+    this._stateMessageId = null;    // last broadcast state message — cached so shutdown can PATCH without a fetch round-trip
     this._rest = new REST().setToken(config.token);
   }
 
@@ -292,8 +293,14 @@ class Coordinator extends EventEmitter {
   }
 
   // Called by main.js gracefulShutdown and by the tray SessionEnding handler.
-  // Runs presence-delete and message-fetch in parallel to minimise wall time —
-  // on Windows shutdown we have ~8 seconds before the OS force-kills the process.
+  // On Windows shutdown we have ~8 seconds before the OS force-kills the
+  // process, so this MUST complete in a single REST round-trip.
+  //
+  // We PATCH the cached state message instead of DELETE-ing it:
+  //   • Single REST call (no fetch needed thanks to the cached ID).
+  //   • The channel keeps a visible "🔴 No active node" indicator for humans.
+  //   • Sending attachments: [] strips the state.json file so future nodes'
+  //     _findStateMessage() returns null and they claim leadership immediately.
   async shutdown() {
     if (this._syncTimer) {
       clearInterval(this._syncTimer);
@@ -307,22 +314,43 @@ class Coordinator extends EventEmitter {
 
     if (!config.coordinationChannelId) return;
 
+    const offlineContent = [
+      '🔴 **No active node** — host shut down',
+      `📅 **Shut down:** <t:${Math.floor(Date.now() / 1000)}:R>`,
+    ].join('\n');
+
     try {
-      // Presence-delete and message-fetch are independent — run them together.
+      if (this._stateMessageId) {
+        // Fast path: single PATCH using the cached message ID. Run in parallel
+        // with standby-presence cleanup (no-op for leaders).
+        await Promise.all([
+          this._rest.patch(
+            Routes.channelMessage(config.coordinationChannelId, this._stateMessageId),
+            { body: { content: offlineContent, attachments: [] } }
+          ).catch((err) => console.warn('[Node] Offline patch failed:', err.message)),
+          this._deletePresence().catch(() => {}),
+        ]);
+        this._invalidateMsgCache();
+        console.log('[Node] State message marked offline.');
+        return;
+      }
+
+      // Fallback: no cached ID (shutdown before first broadcast, or standby
+      // path). Fetch the channel and patch whatever state message is there.
       const [, messages] = await Promise.all([
         this._deletePresence().catch(() => {}),
         this._getCoordMessages().catch(() => null),
       ]);
-
       if (!messages) return;
 
       const stateMsg = this._findStateMessage(messages);
       if (stateMsg) {
-        await this._rest.delete(
-          Routes.channelMessage(config.coordinationChannelId, stateMsg.id)
+        await this._rest.patch(
+          Routes.channelMessage(config.coordinationChannelId, stateMsg.id),
+          { body: { content: offlineContent, attachments: [] } }
         );
         this._invalidateMsgCache();
-        console.log('[Node] State message removed — standbys will elect a new leader.');
+        console.log('[Node] State message marked offline (via fetch).');
       }
     } catch (err) {
       console.warn('[Node] Shutdown cleanup error:', err.message);
@@ -398,7 +426,7 @@ class Coordinator extends EventEmitter {
       { name: 'state.json' }
     );
 
-    await channel.send({
+    const sent = await channel.send({
       content: [
         `🟢 **Leader:** \`${instanceId}\``,
         `📅 **Synced:** <t:${Math.floor(Date.now() / 1000)}:R>`,
@@ -406,6 +434,7 @@ class Coordinator extends EventEmitter {
       ].join('\n'),
       files: [attachment],
     });
+    this._stateMessageId = sent.id;
 
     console.log(`[Leader] State broadcast complete (${nodeCount} node(s) running)`);
   }
